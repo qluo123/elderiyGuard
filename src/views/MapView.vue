@@ -2,9 +2,9 @@
 import { ref, onMounted, watch, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { MapLocation, Timer, Place, ArrowLeft } from '@element-plus/icons-vue'
+import { MapLocation, Timer, ArrowLeft, List } from '@element-plus/icons-vue'
 import type { DayTrajectory, ProcessedRecord } from '@/types/location'
-import { fetchLocationData, processDeviceData, formatTime } from '@/services/dataService'
+import { fetchLocationData, processDeviceData, formatTime, wgs84ToGcj02 } from '@/services/dataService'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 
@@ -16,6 +16,7 @@ const trajectoryDays = ref<DayTrajectory[]>([])
 const selectedDay = ref<string>('')
 const loading = ref(false)
 const mapReady = ref(false)
+const sidebarOpen = ref(false)
 
 let map: L.Map | null = null
 let polyline: L.Polyline | null = null
@@ -29,7 +30,10 @@ const currentTrajectory = computed(() => {
 
 const pathPoints = computed(() => {
   if (!currentTrajectory.value) return []
-  return currentTrajectory.value.records.map(r => [r.lat, r.lng] as [number, number])
+  return currentTrajectory.value.records.map(r => {
+    const [lng, lat] = wgs84ToGcj02(r.lng, r.lat)
+    return [lat, lng] as [number, number]
+  })
 })
 
 function clearMap() {
@@ -48,7 +52,8 @@ function clearMap() {
 function addMarkers(records: ProcessedRecord[]) {
   if (!map) return
   records.forEach((r) => {
-    const marker = L.marker([r.lat, r.lng], {
+    const [gcjLng, gcjLat] = wgs84ToGcj02(r.lng, r.lat)
+    const marker = L.marker([gcjLat, gcjLng], {
       title: r.formattedTime,
     }).addTo(map!)
 
@@ -86,25 +91,26 @@ function drawTrajectory() {
 
 function initMap() {
   if (!mapContainer.value) return
+
+  const [initLng, initLat] = wgs84ToGcj02(120.121754, 36.007915)
+
   map = L.map(mapContainer.value, {
     zoomControl: false,
-  }).setView([36.007915, 120.121754], 14)
+  }).setView([initLat, initLng], 14)
 
-  // 国内地图瓦片源：高德地图（无需Key，仅用于瓦片显示）
-  L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}', {
+  L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=2&style=8&x={x}&y={y}&z={z}', {
     attribution: '&copy; 高德地图',
     subdomains: '1234',
     maxZoom: 18,
+    tileSize: 256,
   }).addTo(map)
 
-  // 添加比例尺控件
   L.control.scale({
     position: 'bottomright',
     metric: true,
     imperial: false,
   }).addTo(map)
 
-  // 添加缩放控件到右上角
   L.control.zoom({
     position: 'topright',
   }).addTo(map)
@@ -171,6 +177,17 @@ function getMockData(): DayTrajectory[] {
 function selectDay(date: string) {
   selectedDay.value = date
   router.replace({ query: { day: date } })
+  if (window.innerWidth < 768) {
+    sidebarOpen.value = false
+  }
+}
+
+function toggleSidebar() {
+  sidebarOpen.value = !sidebarOpen.value
+}
+
+function closeSidebar() {
+  sidebarOpen.value = false
 }
 
 watch(selectedDay, () => {
@@ -184,8 +201,10 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="map-page">
-    <div class="sidebar">
+  <div class="map-page" :class="{ 'hide-list': !sidebarOpen }">
+    <div class="overlay" :class="{ visible: sidebarOpen }" @click="closeSidebar"></div>
+
+    <div class="sidebar" :class="{ open: sidebarOpen }">
       <div class="sidebar-header">
         <el-button text :icon="ArrowLeft" @click="$router.push('/')">返回首页</el-button>
         <h2><MapLocation style="width:20px;height:20px;vertical-align:middle;margin-right:6px;"/>轨迹回放</h2>
@@ -233,12 +252,21 @@ onMounted(async () => {
         </div>
       </div>
     </div>
+
     <div class="map-wrap">
       <div ref="mapContainer" class="map-container"></div>
       <div v-if="!mapReady" class="map-placeholder">
         <el-empty description="地图加载中..." />
       </div>
     </div>
+
+    <button class="toggle-btn list-btn" @click="toggleSidebar" :style="{ display: sidebarOpen ? 'none' : 'flex' }">
+      <List style="width:20px;height:20px;" />
+    </button>
+
+    <button class="toggle-btn map-btn" @click="closeSidebar" :style="{ display: sidebarOpen ? 'flex' : 'none' }">
+      <MapLocation style="width:20px;height:20px;" />
+    </button>
   </div>
 </template>
 
@@ -249,6 +277,7 @@ onMounted(async () => {
   width: 100vw;
   overflow: hidden;
 }
+
 .sidebar {
   width: 360px;
   min-width: 360px;
@@ -257,92 +286,194 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  transition: transform var(--transition-normal), width var(--transition-normal);
 }
+
+@media (max-width: 767px) {
+  .sidebar {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 1000;
+    width: 85%;
+    max-width: 320px;
+    min-width: 280px;
+    transform: translateX(-100%);
+  }
+
+  .sidebar.open {
+    transform: translateX(0);
+    box-shadow: var(--shadow-lg);
+  }
+
+  .sidebar.collapsed {
+    transform: translateX(-100%);
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1023px) {
+  .sidebar {
+    width: 300px;
+    min-width: 300px;
+  }
+}
+
 .sidebar-header {
-  padding: 16px;
+  padding: var(--spacing-md);
   background: #fff;
   border-bottom: 1px solid #e4e7ed;
   flex-shrink: 0;
 }
+
+@media (max-width: 767px) {
+  .sidebar-header {
+    padding: var(--spacing-sm) var(--spacing-md);
+  }
+}
+
 .sidebar-header h2 {
-  margin: 12px 0 0;
-  font-size: 18px;
+  margin: var(--spacing-sm) 0 0;
+  font-size: var(--font-size-lg);
   color: #303133;
 }
+
+@media (max-width: 767px) {
+  .sidebar-header h2 {
+    font-size: var(--font-size-base);
+  }
+}
+
 .loading-wrap, .empty-wrap {
-  padding: 40px;
+  padding: var(--spacing-xl);
   text-align: center;
   flex-shrink: 0;
 }
+
+@media (max-width: 767px) {
+  .loading-wrap, .empty-wrap {
+    padding: var(--spacing-lg);
+  }
+}
+
 .day-list {
   flex: 1;
   overflow-y: auto;
-  padding: 12px;
+  padding: var(--spacing-sm);
 }
+
+@media (max-width: 767px) {
+  .day-list {
+    padding: var(--spacing-xs);
+  }
+}
+
 .day-card {
   background: #fff;
-  border-radius: 8px;
-  padding: 12px;
-  margin-bottom: 10px;
+  border-radius: var(--radius-md);
+  padding: var(--spacing-sm);
+  margin-bottom: var(--spacing-sm);
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all var(--transition-fast);
   border: 1px solid transparent;
 }
+
 .day-card:hover {
   border-color: #c6e2ff;
   box-shadow: 0 2px 8px rgba(64,158,255,0.1);
 }
+
 .day-card.active {
   border-color: #409eff;
   background: #ecf5ff;
 }
+
+@media (max-width: 767px) {
+  .day-card {
+    padding: var(--spacing-xs) var(--spacing-sm);
+    margin-bottom: var(--spacing-xs);
+  }
+}
+
 .day-title {
   font-weight: 600;
   color: #303133;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
+  font-size: var(--font-size-sm);
 }
+
+@media (max-width: 767px) {
+  .day-title {
+    font-size: var(--font-size-xs);
+  }
+}
+
 .day-meta {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 12px;
+  gap: var(--spacing-xs);
+  font-size: var(--font-size-xs);
   color: #606266;
+  flex-wrap: wrap;
 }
+
 .time-range {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
+  font-size: 11px;
 }
+
 .detail-panel {
   flex-shrink: 0;
   max-height: 40vh;
   overflow-y: auto;
-  padding: 16px;
+  padding: var(--spacing-md);
   background: #fff;
   border-top: 1px solid #e4e7ed;
 }
+
+@media (max-width: 767px) {
+  .detail-panel {
+    max-height: 35vh;
+    padding: var(--spacing-sm);
+  }
+}
+
 .detail-panel h4 {
-  margin: 0 0 12px;
-  font-size: 14px;
+  margin: 0 0 var(--spacing-sm);
+  font-size: var(--font-size-sm);
   color: #303133;
 }
-.record-list {
-  padding-left: 8px;
+
+@media (max-width: 767px) {
+  .detail-panel h4 {
+    font-size: var(--font-size-xs);
+    margin-bottom: var(--spacing-xs);
+  }
 }
+
+.record-list {
+  padding-left: var(--spacing-xs);
+}
+
 .record-item {
   display: flex;
   align-items: flex-start;
-  padding: 8px 0;
+  padding: var(--spacing-xs) 0;
   border-left: 2px solid #dcdfe6;
-  padding-left: 12px;
+  padding-left: var(--spacing-sm);
   position: relative;
 }
+
 .record-item.start {
   border-left-color: #409eff;
 }
+
 .record-item.end {
   border-left-color: #67c23a;
 }
+
 .record-dot {
   width: 8px;
   height: 8px;
@@ -350,39 +481,54 @@ onMounted(async () => {
   background: #c0c4cc;
   position: absolute;
   left: -5px;
-  top: 12px;
+  top: 10px;
 }
+
 .record-item.start .record-dot {
   background: #409eff;
 }
+
 .record-item.end .record-dot {
   background: #67c23a;
 }
+
 .record-content {
-  font-size: 13px;
+  font-size: var(--font-size-xs);
 }
+
+@media (max-width: 767px) {
+  .record-content {
+    font-size: 11px;
+  }
+}
+
 .record-time {
   font-weight: 500;
   color: #303133;
 }
+
 .record-coords {
   color: #606266;
-  font-size: 12px;
+  font-size: 11px;
   margin-top: 2px;
 }
+
 .record-name {
   color: #409eff;
-  font-size: 12px;
+  font-size: 11px;
   margin-top: 2px;
 }
+
 .map-wrap {
   flex: 1;
   position: relative;
 }
+
 .map-container {
   width: 100%;
   height: 100%;
 }
+
 .map-placeholder {
   position: absolute;
   top: 0;
@@ -393,5 +539,82 @@ onMounted(async () => {
   align-items: center;
   justify-content: center;
   background: #f5f7fa;
+}
+
+.toggle-btn {
+  display: none;
+  position: fixed;
+  z-index: 1001;
+  padding: var(--spacing-sm);
+  border-radius: var(--radius-md);
+  background: #fff;
+  box-shadow: var(--shadow-md);
+  border: none;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.toggle-btn:hover {
+  background: #f5f7fa;
+}
+
+.toggle-btn.list-btn {
+  left: var(--spacing-md);
+  bottom: var(--spacing-lg);
+}
+
+.toggle-btn.map-btn {
+  right: var(--spacing-md);
+  bottom: var(--spacing-lg);
+}
+
+@media (max-width: 767px) {
+  .toggle-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+  }
+
+  .toggle-btn.list-btn {
+    left: var(--spacing-md);
+    bottom: var(--spacing-lg);
+  }
+
+  .toggle-btn.map-btn {
+    right: var(--spacing-md);
+    bottom: var(--spacing-lg);
+  }
+}
+
+.overlay {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 999;
+}
+
+@media (max-width: 767px) {
+  .overlay.visible {
+    display: block;
+  }
+}
+
+@media (max-width: 767px) {
+  .map-page.hide-list .sidebar {
+    transform: translateX(-100%);
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1023px) {
+  .toggle-btn {
+    display: none !important;
+  }
 }
 </style>
