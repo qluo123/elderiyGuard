@@ -17,6 +17,46 @@ const selectedDay = ref<string>('')
 const loading = ref(false)
 const mapReady = ref(false)
 const sidebarOpen = ref(false)
+const dateRange = ref<[Date, Date] | null>(null)
+const startTimeFilter = ref<string>('')
+const endTimeFilter = ref<string>('')
+
+const filteredTrajectoryDays = computed(() => {
+  if (!dateRange.value && !startTimeFilter.value && !endTimeFilter.value) {
+    return trajectoryDays.value
+  }
+  return trajectoryDays.value.filter(day => {
+    const dayDate = new Date(day.date)
+    if (dateRange.value) {
+      const [start, end] = dateRange.value
+      start.setHours(0, 0, 0, 0)
+      end.setHours(23, 59, 59, 999)
+      if (dayDate < start || dayDate > end) return false
+    }
+    if (startTimeFilter.value || endTimeFilter.value) {
+      const dayRecords = day.records.filter(r => {
+        if (startTimeFilter.value && r.timeStr < startTimeFilter.value) return false
+        if (endTimeFilter.value && r.timeStr > endTimeFilter.value) return false
+        return true
+      })
+      return dayRecords.length > 0
+    }
+    return true
+  })
+})
+
+function clearFilters() {
+  dateRange.value = null
+  startTimeFilter.value = ''
+  endTimeFilter.value = ''
+}
+
+function applyTimeFilter() {
+  if (startTimeFilter.value && endTimeFilter.value && startTimeFilter.value > endTimeFilter.value) {
+    ElMessage.warning('开始时间不能大于结束时间')
+    return
+  }
+}
 
 let map: L.Map | null = null
 let polyline: L.Polyline | null = null
@@ -25,12 +65,68 @@ let popup: L.Popup | null = null
 
 const currentTrajectory = computed(() => {
   if (!selectedDay.value) return null
-  return trajectoryDays.value.find(d => d.date === selectedDay.value) || null
+  return filteredTrajectoryDays.value.find(d => d.date === selectedDay.value) || null
+})
+
+const filteredCurrentRecords = computed(() => {
+  if (!currentTrajectory.value) return []
+  let records = currentTrajectory.value.records
+  if (startTimeFilter.value || endTimeFilter.value) {
+    records = records.filter(r => {
+      if (startTimeFilter.value && r.timeStr < startTimeFilter.value) return false
+      if (endTimeFilter.value && r.timeStr > endTimeFilter.value) return false
+      return true
+    })
+  }
+  return records
+})
+
+const trajectoryStats = computed(() => {
+  if (!filteredCurrentRecords.value.length) return null
+  const records = filteredCurrentRecords.value
+  let totalDistance = 0
+  let maxSpeed = 0
+  let avgSpeed = 0
+  const speeds: number[] = []
+
+  for (let i = 1; i < records.length; i++) {
+    const prev = records[i - 1]
+    const curr = records[i]
+    const timeDiff = (curr.time - prev.time) / 1000 / 60
+    if (timeDiff > 0) {
+      const R = 6371
+      const dLat = (curr.lat - prev.lat) * Math.PI / 180
+      const dLon = (curr.lng - prev.lng) * Math.PI / 180
+      const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(prev.lat * Math.PI / 180) * Math.cos(curr.lat * Math.PI / 180) *
+        Math.sin(dLon / 2) * Math.sin(dLon / 2)
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+      const distance = R * c * 1000
+      totalDistance += distance
+      const speed = distance / timeDiff / 60
+      speeds.push(speed)
+      if (speed > maxSpeed) maxSpeed = speed
+    }
+  }
+
+  if (speeds.length > 0) {
+    avgSpeed = speeds.reduce((a, b) => a + b, 0) / speeds.length
+  }
+
+  const duration = records.length > 1 ? (records[records.length - 1].time - records[0].time) / 1000 / 60 : 0
+
+  return {
+    totalDistance: (totalDistance / 1000).toFixed(2),
+    maxSpeed: maxSpeed.toFixed(1),
+    avgSpeed: avgSpeed.toFixed(1),
+    duration: duration.toFixed(0),
+    pointCount: records.length
+  }
 })
 
 const pathPoints = computed(() => {
-  if (!currentTrajectory.value) return []
-  return currentTrajectory.value.records.map(r => {
+  if (!filteredCurrentRecords.value.length) return []
+  return filteredCurrentRecords.value.map(r => {
     const [lng, lat] = wgs84ToGcj02(r.lng, r.lat)
     return [lat, lng] as [number, number]
   })
@@ -83,7 +179,7 @@ function drawTrajectory() {
     opacity: 0.8,
   }).addTo(map)
 
-  addMarkers(currentTrajectory.value.records)
+  addMarkers(filteredCurrentRecords.value)
 
   const bounds = L.latLngBounds(points)
   map.fitBounds(bounds, { padding: [60, 60] })
@@ -180,6 +276,7 @@ function selectDay(date: string) {
   if (window.innerWidth < 768) {
     sidebarOpen.value = false
   }
+  drawTrajectory()
 }
 
 function toggleSidebar() {
@@ -209,6 +306,51 @@ onMounted(async () => {
         <el-button text :icon="ArrowLeft" @click="$router.push('/')">返回首页</el-button>
         <h2><MapLocation style="width:20px;height:20px;vertical-align:middle;margin-right:6px;"/>轨迹回放</h2>
       </div>
+      <div class="filter-section">
+        <div class="filter-row">
+          <span class="filter-label">日期范围</span>
+          <el-date-picker
+            v-model="dateRange"
+            type="daterange"
+            range-separator="至"
+            start-placeholder="开始日期"
+            end-placeholder="结束日期"
+            size="small"
+            value-format="YYYY-MM-DD"
+            @change="drawTrajectory"
+          />
+        </div>
+        <div class="filter-row">
+          <span class="filter-label">时间筛选</span>
+          <div class="time-filter">
+            <el-time-select
+              v-model="startTimeFilter"
+              placeholder="开始时间"
+              start="00:00"
+              step="00:15"
+              end="23:45"
+              size="small"
+              style="width: 100px;"
+              @change="applyTimeFilter"
+            />
+            <span class="time-separator">至</span>
+            <el-time-select
+              v-model="endTimeFilter"
+              placeholder="结束时间"
+              start="00:00"
+              step="00:15"
+              end="23:45"
+              size="small"
+              style="width: 100px;"
+              @change="applyTimeFilter"
+            />
+          </div>
+        </div>
+        <div v-if="dateRange || startTimeFilter || endTimeFilter" class="filter-actions">
+          <el-button size="small" @click="clearFilters">清除筛选</el-button>
+          <span class="filter-info">共 {{ filteredTrajectoryDays.length }} 天</span>
+        </div>
+      </div>
       <div v-if="loading" class="loading-wrap">
         加载中...
       </div>
@@ -217,7 +359,7 @@ onMounted(async () => {
       </div>
       <div v-else class="day-list">
         <div
-          v-for="day in trajectoryDays"
+          v-for="day in filteredTrajectoryDays"
           :key="day.date"
           class="day-card"
           :class="{ active: selectedDay === day.date }"
@@ -235,12 +377,30 @@ onMounted(async () => {
       </div>
       <div v-if="currentTrajectory" class="detail-panel">
         <h4>当日轨迹详情</h4>
+        <div v-if="trajectoryStats" class="stats-cards">
+          <div class="stat-item">
+            <div class="stat-value">{{ trajectoryStats.totalDistance }}</div>
+            <div class="stat-label">公里</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-value">{{ trajectoryStats.maxSpeed }}</div>
+            <div class="stat-label">最大 m/min</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-value">{{ trajectoryStats.avgSpeed }}</div>
+            <div class="stat-label">平均 m/min</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-value">{{ trajectoryStats.duration }}</div>
+            <div class="stat-label">分钟</div>
+          </div>
+        </div>
         <div class="record-list">
           <div
-            v-for="(r, idx) in currentTrajectory.records"
+            v-for="(r, idx) in filteredCurrentRecords"
             :key="r.id"
             class="record-item"
-            :class="{ start: idx === 0, end: idx === currentTrajectory.records.length - 1 }"
+            :class="{ start: idx === 0, end: idx === filteredCurrentRecords.length - 1 }"
           >
             <div class="record-dot"></div>
             <div class="record-content">
@@ -344,6 +504,51 @@ onMounted(async () => {
   }
 }
 
+.filter-section {
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: #fff;
+  border-bottom: 1px solid #e4e7ed;
+  flex-shrink: 0;
+}
+
+.filter-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: var(--spacing-xs);
+  gap: var(--spacing-xs);
+}
+
+.filter-label {
+  font-size: var(--font-size-xs);
+  color: #606266;
+  min-width: 56px;
+}
+
+.time-filter {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+
+.time-separator {
+  color: #909399;
+  font-size: var(--font-size-xs);
+}
+
+.filter-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: var(--spacing-xs);
+  padding-top: var(--spacing-xs);
+  border-top: 1px dashed #e4e7ed;
+}
+
+.filter-info {
+  font-size: var(--font-size-xs);
+  color: #409eff;
+}
+
 .loading-wrap, .empty-wrap {
   padding: var(--spacing-xl);
   text-align: center;
@@ -438,6 +643,32 @@ onMounted(async () => {
     max-height: 35vh;
     padding: var(--spacing-sm);
   }
+}
+
+.stats-cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--spacing-xs);
+  margin-bottom: var(--spacing-md);
+  padding: var(--spacing-sm);
+  background: #f5f7fa;
+  border-radius: var(--radius-md);
+}
+
+.stat-item {
+  text-align: center;
+}
+
+.stat-value {
+  font-size: var(--font-size-base);
+  font-weight: 600;
+  color: #409eff;
+}
+
+.stat-label {
+  font-size: 10px;
+  color: #909399;
+  margin-top: 2px;
 }
 
 .detail-panel h4 {
