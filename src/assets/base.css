@@ -32,9 +32,15 @@
 
   --section-gap: 160px;
 
-  --bp-mobile: 768px;
-  --bp-tablet: 1024px;
+  --bp-mobile-xs: 360px;
+  --bp-mobile: 480px;
+  --bp-mobile-lg: 640px;
+  --bp-tablet: 768px;
+  --bp-tablet-lg: 1024px;
   --bp-desktop: 1280px;
+  --bp-desktop-lg: 1440px;
+  --bp-desktop-xl: 1920px;
+  --bp-desktop-2xl: 2560px;
 
   --spacing-xs: 4px;
   --spacing-sm: 8px;
@@ -62,6 +68,24 @@
   --transition-normal: 0.3s ease;
 }
 
+@media (min-width: 480px) and (max-width: 639px) {
+  :root {
+    --spacing-md: 18px;
+    --spacing-lg: 24px;
+    --spacing-xl: 32px;
+    --font-size-base: 15px;
+  }
+}
+
+@media (min-width: 640px) and (max-width: 767px) {
+  :root {
+    --spacing-md: 20px;
+    --spacing-lg: 28px;
+    --spacing-xl: 36px;
+    --font-size-base: 15px;
+  }
+}
+
 @media (min-width: 768px) and (max-width: 1023px) {
   :root {
     --spacing-md: 20px;
@@ -71,12 +95,39 @@
   }
 }
 
-@media (min-width: 1024px) {
+@media (min-width: 1024px) and (max-width: 1279px) {
   :root {
     --spacing-lg: 32px;
     --spacing-xl: 48px;
     --font-size-lg: 20px;
     --font-size-xl: 28px;
+  }
+}
+
+@media (min-width: 1280px) and (max-width: 1439px) {
+  :root {
+    --spacing-lg: 36px;
+    --spacing-xl: 52px;
+    --font-size-lg: 20px;
+    --font-size-xl: 30px;
+  }
+}
+
+@media (min-width: 1440px) and (max-width: 1919px) {
+  :root {
+    --spacing-lg: 40px;
+    --spacing-xl: 56px;
+    --font-size-lg: 22px;
+    --font-size-xl: 32px;
+  }
+}
+
+@media (min-width: 1920px) {
+  :root {
+    --spacing-lg: 44px;
+    --spacing-xl: 60px;
+    --font-size-lg: 24px;
+    --font-size-xl: 36px;
   }
 }
 
